@@ -1,0 +1,10 @@
+[package]
+edition = '2018'
+name = "minimal"
+version = "0.1.0"
+authors = ["Yarrow Angelweed <yarrow.angelweed@gmail.com>"]
+
+[dependencies]
+rental = "0.5.2"
+indexmap = "1.0.1"
+memchr = "2.1.0"
