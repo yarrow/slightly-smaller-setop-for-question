@@ -3,11 +3,8 @@ use std::{
     slice::Iter,
 };
 
-use indexmap::{self, IndexSet};
+use indexmap::IndexSet;
 use memchr::Memchr;
-
-#[macro_use]
-extern crate rental;
 
 #[derive(Clone, Copy)]
 enum OpName {
@@ -24,89 +21,71 @@ where
     // We can't say Sized + IntoLineIterator: rustc complains that there's
     // no implementation for type Foo, just for type &'a Foo
 {
-    fn init(text: TextVec) -> Self;
     fn operate(&mut self, text: &TextSlice);
     fn finish(&mut self) {}
-    fn write_to(&self, out: &mut impl Write);
-}
-
-trait IntoLineIterator {
-    type Item: AsRef<TextSlice>;
-    type IntoIter: Iterator<Item = Self::Item>;
-    fn result_lines(&self) -> Self::IntoIter;
+    fn iter<'me>(&'me self) -> Box<dyn Iterator<Item = &'me TextSlice> + 'me>;
 }
 
 // I can't figure out how to implement this function inside the `SetExpression` trait,
 // so every `impl trait SetExpression` will have have a `write_to` function that
 // just calls `rite_to`
 //
-fn rite_to(zelf: &impl IntoLineIterator, out: &mut impl Write) {
-    for line in zelf.result_lines() {
+fn rite_to(zelf: &impl SetExpression, out: &mut impl Write) {
+    for line in zelf.iter() {
         out.write_all(line.as_ref()).unwrap();
     }
 }
 
 type UnionSet = IndexSet<TextVec>;
-use self::rented_slice_set::IntersectSet;
 
-impl SetExpression for UnionSet {
+trait UnionSetExt {
+    fn init(text: TextVec) -> Self;
+}
+
+impl UnionSetExt for UnionSet {
     // The first operand is initialized by calling the `LineSet`'s initialization method.
     fn init(text: TextVec) -> Self {
         UnionSet::init_from_slice(&text)
     }
+}
+
+impl SetExpression for UnionSet {
     // For subsequent operands we simply insert each line into the hash
     fn operate(&mut self, text: &TextSlice) {
         self.insert_all_lines(&text);
     }
-    fn write_to(&self, mut out: &mut impl Write) {
-        rite_to(&self, &mut out)
-    }
-}
-
-impl<'a> IntoLineIterator for &'a UnionSet {
-    type Item = &'a TextVec;
-    type IntoIter = indexmap::set::Iter<'a, TextVec>;
-
-    // A `UnionSet`'s `result_lines` iterator is the iterator of the underlying `IndexSet`
-    fn result_lines(&self) -> Self::IntoIter {
-        self.iter()
+    fn iter<'me>(&'me self) -> Box<dyn Iterator<Item = &'me TextSlice> + 'me> {
+        Box::new(self.iter().map(|v| v.as_slice()))
     }
 }
 
 // For an `IntersectSet` all result lines will be from the
 // first file operand, so we can avoid additional allocations by keeping its
 // text in memory and using subslices of its text as the members of the set.
-rental! {
-    pub mod rented_slice_set {
-        use crate::{SliceSet, TextVec};
-        #[rental(covariant)]
-        pub(crate) struct IntersectSet {
-            text: TextVec,
-            set: SliceSet<'text>
-        }
+type IntersectSet<'data> = IndexSet<&'data TextSlice>;
+
+trait IntersectSetExt<'data> {
+    fn init(text: &'data TextVec) -> Self;
+}
+
+impl<'data> IntersectSetExt<'data> for IntersectSet<'data> {
+    fn init(text: &'data TextVec) -> Self {
+        SliceSet::init_from_slice(text)
     }
 }
 
 // For subsequent operands, we take a `SliceSet` `s` of the operand's text and
 // keep only those lines that occur in `s`.
-impl SetExpression for IntersectSet {
-    fn init(text: TextVec) -> Self {
-        IntersectSet::new(text, |x| SliceSet::init_from_slice(x))
-    }
+impl<'data> SetExpression for IntersectSet<'data> {
     fn operate(&mut self, text: &TextSlice) {
         let other = SliceSet::init_from_slice(text);
-        self.rent_mut(|set| set.retain(|x| other.contains(x)));
+        self.retain(|x| other.contains(x));
     }
-    fn write_to(&self, mut out: &mut impl Write) {
-        rite_to(&self, &mut out)
-    }
-}
-
-impl<'a> IntoLineIterator for &'a IntersectSet {
-    type Item = &'a &'a TextSlice;
-    type IntoIter = indexmap::set::Iter<'a, &'a TextSlice>;
-    fn result_lines(&self) -> Self::IntoIter {
-        self.suffix().iter()
+    fn iter<'me>(&'me self) -> Box<dyn Iterator<Item = &'me TextSlice> + 'me> {
+        // Set<&VecSlice>
+        // .iter => &&VecSlice
+        // .cloned => &VecSlice
+        Box::new(self.iter().cloned())
     }
 }
 
@@ -114,18 +93,20 @@ fn do_calculation(op: OpName, mut texts: Iter<TextVec>) {
     let txt = texts.next().unwrap();
     match op {
         OpName::Union => calculate_and_print(&mut UnionSet::init(txt.to_vec()), texts),
-        OpName::Intersect => calculate_and_print(&mut IntersectSet::init(txt.to_vec()), texts),
+        OpName::Intersect => calculate_and_print(&mut IntersectSet::init(&txt), texts),
     }
 }
 
-fn calculate_and_print(set: &mut impl SetExpression, texts: Iter<TextVec>) {
+fn calculate_and_print<T>(set: &mut T, texts: Iter<TextVec>)
+where T: SetExpression
+{
     for txt in texts {
         set.operate(txt);
     }
     set.finish();
     let stdout_for_locking = io::stdout();
     let mut stdout = stdout_for_locking.lock();
-    set.write_to(&mut stdout);
+    rite_to(set, &mut stdout);
 }
 
 // Sets are implemented as variations on the `IndexSet` type
