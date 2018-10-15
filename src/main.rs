@@ -21,13 +21,16 @@ type TextSlice = [u8];
 trait SetExpression
 where
     Self: Sized,
+    for<'iter> &'iter Self: IntoLineIterator,
     // We can't say Sized + IntoLineIterator: rustc complains that there's
     // no implementation for type Foo, just for type &'a Foo
 {
     fn init(text: TextVec) -> Self;
     fn operate(&mut self, text: &TextSlice);
     fn finish(&mut self) {}
-    fn write_to(&self, out: &mut impl Write);
+    fn write_to(&self, mut out: &mut impl Write)  {
+        rite_to(&self, &mut out)
+    }
 }
 
 trait IntoLineIterator {
@@ -57,9 +60,6 @@ impl SetExpression for UnionSet {
     // For subsequent operands we simply insert each line into the hash
     fn operate(&mut self, text: &TextSlice) {
         self.insert_all_lines(&text);
-    }
-    fn write_to(&self, mut out: &mut impl Write) {
-        rite_to(&self, &mut out)
     }
 }
 
@@ -97,9 +97,6 @@ impl SetExpression for IntersectSet {
         let other = SliceSet::init_from_slice(text);
         self.rent_mut(|set| set.retain(|x| other.contains(x)));
     }
-    fn write_to(&self, mut out: &mut impl Write) {
-        rite_to(&self, &mut out)
-    }
 }
 
 impl<'a> IntoLineIterator for &'a IntersectSet {
@@ -118,7 +115,9 @@ fn do_calculation(op: OpName, mut texts: Iter<TextVec>) {
     }
 }
 
-fn calculate_and_print(set: &mut impl SetExpression, texts: Iter<TextVec>) {
+fn calculate_and_print<T>(set: &mut T, texts: Iter<TextVec>)
+where T: SetExpression, for<'a> &'a T: IntoLineIterator,
+{
     for txt in texts {
         set.operate(txt);
     }
