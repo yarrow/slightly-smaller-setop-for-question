@@ -24,7 +24,6 @@ where
     // We can't say Sized + IntoLineIterator: rustc complains that there's
     // no implementation for type Foo, just for type &'a Foo
 {
-    fn init(text: TextVec) -> Self;
     fn operate(&mut self, text: &TextSlice);
     fn finish(&mut self) {}
     fn iter<'me>(&'me self) -> Box<dyn Iterator<Item = &'me TextSlice> + 'me>;
@@ -49,11 +48,18 @@ fn rite_to(zelf: &impl SetExpression, out: &mut impl Write) {
 type UnionSet = IndexSet<TextVec>;
 use self::rented_slice_set::IntersectSet;
 
-impl SetExpression for UnionSet {
+trait UnionSetExt {
+    fn init(text: TextVec) -> Self;
+}
+
+impl UnionSetExt for UnionSet {
     // The first operand is initialized by calling the `LineSet`'s initialization method.
     fn init(text: TextVec) -> Self {
         UnionSet::init_from_slice(&text)
     }
+}
+
+impl SetExpression for UnionSet {
     // For subsequent operands we simply insert each line into the hash
     fn operate(&mut self, text: &TextSlice) {
         self.insert_all_lines(&text);
@@ -87,12 +93,19 @@ rental! {
     }
 }
 
-// For subsequent operands, we take a `SliceSet` `s` of the operand's text and
-// keep only those lines that occur in `s`.
-impl SetExpression for IntersectSet {
+trait IntersectSetExt {
+    fn init(text: TextVec) -> Self;
+}
+
+impl IntersectSetExt for IntersectSet {
     fn init(text: TextVec) -> Self {
         IntersectSet::new(text, |x| SliceSet::init_from_slice(x))
     }
+}
+
+// For subsequent operands, we take a `SliceSet` `s` of the operand's text and
+// keep only those lines that occur in `s`.
+impl SetExpression for IntersectSet {
     fn operate(&mut self, text: &TextSlice) {
         let other = SliceSet::init_from_slice(text);
         self.rent_mut(|set| set.retain(|x| other.contains(x)));
